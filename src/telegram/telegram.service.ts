@@ -322,10 +322,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             await this.prisma.task.update({ where: { id: reminder.task.id }, data: { status: 'OVERDUE' } });
           }
           const text = reminder.reminderType === 'TEN_MINUTES'
-            ? `⏰ 10 menit lagi deadline-nya!\n📝 ${reminder.task.title}\nDeadline: ${this.formatDate(reminder.task.deadline)}`
+            ? `⏰ 10 menit lagi deadline-nya cuy!\n📝 ${reminder.task.title}\nDeadline: ${this.formatDate(reminder.task.deadline)}`
             : overdue
-            ? `Eh, task ini udah lewat deadline.\n📝 ${reminder.task.title}\nDeadline: ${this.formatDate(reminder.task.deadline)}`
-            : `Hey, masih ada task nih!\n📝 ${reminder.task.title}\n📅 Deadline: ${this.formatDate(reminder.task.deadline)}`;
+            ? `woi, task ini udah lewat deadline :)).\n📝 ${reminder.task.title}\nDeadline: ${this.formatDate(reminder.task.deadline)}`
+            : `hey, janlup masih ada task nih!\n📝 ${reminder.task.title}\n📅 Deadline: ${this.formatDate(reminder.task.deadline)}`;
           await this.bot.telegram.sendMessage(reminder.task.userId.toString(), text, this.taskKeyboard([{ id: reminder.task.id }]));
           await this.prisma.reminder.update({ where: { id: reminder.id }, data: { status: 'SENT', sentAt: new Date() } });
         } catch (error) {
