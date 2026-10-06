@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum TaskStatus {
+  PENDING
+  COMPLETED
+  OVERDUE
+}
+
+model Task {
+  id          String      @id @default(uuid())
+  userId      BigInt      @map("user_id")
+  title       String
+  deadline    DateTime
+  status      TaskStatus  @default(PENDING)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  completedAt DateTime?   @map("completed_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+  reminders   Reminder[]
+
+  @@map("tasks")
+}
+
+model Reminder {
+  id           String    @id @default(uuid())
+  taskId       String    @map("task_id")
+  task         Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reminderType String    @map("reminder_type")
+  scheduledAt  DateTime  @map("scheduled_at")
+  sentAt       DateTime? @map("sent_at")
+  status       String    @default("PENDING")
+
+  @@map("reminders")
+}

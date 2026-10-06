@@ -66,11 +66,26 @@ Command yang tersedia:
 /add
 /tasks
 /today
-/done <task-id>
+/overdue
+/done <judul>
 /help
 ```
 
-Alur `/add` bersifat conversational. Bot meminta judul lalu menampilkan kalender inline untuk memilih tanggal, jam, dan menit dalam WIB. ID task disimpan internal untuk callback tombol dan tidak ditampilkan ke pengguna. `/done` menerima judul task. Reminder worker berjalan setiap 30 detik, mengirim reminder pending yang sudah jatuh tempo, lalu menandainya sebagai `SENT`. Tombol `Selesai`, `Snooze`, dan `Hapus` tersedia pada daftar task dan pesan reminder.
+Alur `/add` bersifat conversational. Bot meminta judul lalu menampilkan kalender inline untuk memilih tanggal, jam, dan menit dalam WIB. ID task disimpan internal untuk callback tombol dan tidak ditampilkan ke pengguna. `/done` menerima judul task. Reminder worker berjalan setiap 30 detik, mengirim reminder 10 menit sebelum deadline dan pesan overdue, lalu menandainya sebagai `SENT`. Tombol `Selesai`, `Snooze`, dan `Hapus` tersedia pada daftar task dan pesan reminder.
+
+## Deploy gratis tanpa kartu
+
+Repository ini sudah memiliki `Dockerfile` dan bisa dijalankan sebagai Docker Space di Hugging Face. Buat Space baru dengan SDK **Docker**, lalu upload isi repository ini. Tambahkan variables/secrets berikut di Settings Space:
+
+```text
+DATABASE_URL
+DIRECT_URL
+TELEGRAM_BOT_TOKEN
+TZ=Asia/Jakarta
+DISABLE_TELEGRAM=false
+```
+
+Jangan upload `.env`. Docker image memakai port `7860`, menjalankan `npm run start:prod`, dan schema Prisma sudah berada di folder `prisma` dalam repository ini. Migration database tidak dijalankan saat container start karena database Supabase sudah dimigrasikan.
 
 ## Project setup
 

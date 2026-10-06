@@ -14,7 +14,7 @@ process.env.DATABASE_URL = process.env.DIRECT_URL;
 const prismaCli = fileURLToPath(new URL('../node_modules/prisma/build/index.js', import.meta.url));
 const result = spawnSync(
   process.execPath,
-  [prismaCli, 'migrate', 'dev', '--schema', '../prisma/schema.prisma', ...process.argv.slice(2)],
+  [prismaCli, 'migrate', 'dev', '--schema', 'prisma/schema.prisma', ...process.argv.slice(2)],
   { stdio: 'inherit', env: process.env },
 );
 
