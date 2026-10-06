@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2021",
+    "allowJs": true,
+    "skipLibCheck": true,
+    "noImplicitAny": false
+  },
+  "nodeModulesDir": "auto"
+}
