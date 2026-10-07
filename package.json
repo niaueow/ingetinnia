@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "npm run prisma:generate && nest build --path tsconfig.build.json",
+    "build": "npm run prisma:generate && node -e \"fs.rmSync('dist', {recursive:true, force:true}); fs.rmSync('tsconfig.build.tsbuildinfo', {force:true})\" && nest build --path tsconfig.build.json",
     "prisma:generate": "prisma generate",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
