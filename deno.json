@@ -6,5 +6,6 @@
     "skipLibCheck": true,
     "noImplicitAny": false
   },
-  "nodeModulesDir": "auto"
+  "nodeModulesDir": "auto",
+  "exclude": ["node_modules", "test", "**/*.spec.ts", "vitest.config*.ts"]
 }
