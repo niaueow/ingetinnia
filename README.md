@@ -53,6 +53,8 @@ GET    /tasks/today
 GET    /tasks/upcoming
 PATCH  /tasks/:id/complete
 PATCH  /tasks/:id/deadline    { "deadline": "..." }
+PATCH  /tasks/:id             { "title": "...", "deadline": "...", "status": "PENDING" }
+DELETE /tasks                 { "taskIds": ["task-id-1", "task-id-2"] }
 DELETE /tasks/:id
 ```
 
@@ -73,9 +75,15 @@ Available commands:
 /today
 /overdue
 /done <judul>
+/edit <taskId>
+/bulkdelete
 /help
 ```
 
-The `/add` flow asks for a title and then shows an inline WIB calendar for date, hour, and minute selection. The reminder worker runs every 30 seconds, sends pending reminders in batches, and marks overdue tasks.
+The `/add` flow asks for a title and then shows an inline WIB calendar for date, hour, and minute selection.
+From `/tasks`, use **Edit** to change a task title, deadline, or status. `/edit <taskId>`
+opens the same editor directly. `/bulkdelete` displays active and completed tasks with
+checkboxes, plus actions for deleting all completed or all pending tasks.
+The reminder worker runs every 30 seconds, sends pending reminders in batches, and marks overdue tasks.
 If Telegram reports that a recipient chat does not exist, is blocked, or is deactivated,
 the affected reminder is marked `CANCELLED` so the worker does not retry it forever.

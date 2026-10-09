@@ -25,17 +25,30 @@ const DUE_REMINDER_SELECT = {
 };
 
 type AddState = {
+  flow?: 'add';
   step: 'title' | 'date' | 'hour' | 'minute';
   title?: string;
   date?: string;
   hour?: number;
 };
+type EditState = {
+  flow: 'edit';
+  step: 'field' | 'title' | 'date' | 'hour' | 'minute';
+  taskId: string;
+  date?: string;
+  hour?: number;
+};
+type BulkDeleteState = {
+  flow: 'bulk-delete';
+  selectedTaskIds: Set<string>;
+};
+type BotState = AddState | EditState | BulkDeleteState;
 type BotContext = Context & { chat?: { id: number }; from?: { id: number } };
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramService.name);
-  private readonly states = new Map<number, AddState>();
+  private readonly states = new Map<number, BotState>();
   private bot?: Telegraf<BotContext>;
   private reminderTimer?: NodeJS.Timeout;
   private reminderWorkerRunning = false;
@@ -94,6 +107,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     bot.command('today', (ctx) => this.sendToday(ctx));
     bot.command('overdue', (ctx) => this.sendOverdue(ctx));
     bot.command('done', (ctx) => this.completeFromCommand(ctx));
+    bot.command('bulkdelete', (ctx) => this.beginBulkDelete(ctx));
+    bot.command('edit', (ctx) => this.beginEditFromCommand(ctx));
 
     bot.on('callback_query', async (ctx) => {
       const callback = ctx.callbackQuery;
@@ -123,6 +138,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/today - task hari ini',
       '/overdue - task overdue hari ini',
       '/done <judul> - selesaikan task',
+      '/edit <taskId> - edit judul, deadline, atau status task',
+      '/bulkdelete - hapus beberapa task sekaligus',
       '',
       'Deadline dipilih lewat kalender WIB setelah judul task diisi.',
     ].join('\n');
@@ -164,6 +181,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     const state = this.states.get(chatId);
     if (!state) return;
+    if ('flow' in state && state.flow === 'bulk-delete') return;
+    if ('flow' in state && state.flow === 'edit') {
+      if (state.step !== 'title') return;
+      try {
+        const task = await this.tasks.updateTask(BigInt(chatId), state.taskId, {
+          title: text,
+        });
+        this.states.delete(chatId);
+        return void ctx.reply(
+          `Judul task berhasil diubah.\n${this.formatTaskLine(task)}`,
+          this.taskKeyboard([{ id: task.id }]),
+        );
+      } catch (error) {
+        return void ctx.reply(
+          error instanceof Error ? error.message : 'Task belum bisa diubah.',
+        );
+      }
+    }
     if (state.step === 'title') {
       this.states.set(chatId, { step: 'date', title: text });
       return this.sendCalendar(ctx);
@@ -251,6 +286,45 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async beginEditFromCommand(ctx: BotContext): Promise<void> {
+    const chatId = this.chatId(ctx);
+    const message = ctx.message;
+    if (!chatId || !message || !('text' in message)) return;
+    const taskId = message.text.replace(/^\/edit\s*/i, '').trim();
+    if (!taskId) {
+      return void ctx.reply(
+        'Pakai: /edit <taskId>\nAtau buka /tasks lalu tekan tombol Edit.',
+      );
+    }
+    await this.beginEdit(ctx, taskId);
+  }
+
+  private async beginEdit(ctx: BotContext, taskId: string): Promise<void> {
+    const chatId = this.chatId(ctx);
+    if (!chatId) return;
+    this.states.set(chatId, { flow: 'edit', step: 'field', taskId });
+    await ctx.reply(
+      'Mau edit bagian yang mana?',
+      this.editFieldKeyboard(taskId),
+    );
+  }
+
+  private async beginBulkDelete(ctx: BotContext): Promise<void> {
+    const chatId = this.chatId(ctx);
+    if (!chatId) return;
+    const tasks = await this.tasks.listForBulkDelete(BigInt(chatId));
+    if (!tasks.length)
+      return void ctx.reply('Belum ada task yang bisa dihapus.');
+    this.states.set(chatId, {
+      flow: 'bulk-delete',
+      selectedTaskIds: new Set<string>(),
+    });
+    await ctx.reply(
+      this.bulkDeleteMessage(tasks, new Set<string>()),
+      this.bulkDeleteKeyboard(tasks, new Set<string>()),
+    );
+  }
+
   private async handleCallback(ctx: BotContext, data: string): Promise<void> {
     const chatId = this.chatId(ctx);
     if (!chatId) return;
@@ -260,7 +334,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       } else if (action === 'date') {
         const state = this.states.get(chatId);
-        if (!state?.title) return;
+        if (!state || !('step' in state)) return;
+        if (!('flow' in state && state.flow === 'edit') && !state.title) return;
         this.states.set(chatId, { ...state, step: 'hour', date: value });
         await ctx.editMessageText(
           `Tanggal ${value} dipilih. Jam berapa nih?`,
@@ -268,7 +343,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         );
       } else if (action === 'hour') {
         const state = this.states.get(chatId);
-        if (!state?.title || !state.date) return;
+        if (!state || !('step' in state) || !state.date) return;
         this.states.set(chatId, {
           ...state,
           step: 'minute',
@@ -280,7 +355,31 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         );
       } else if (action === 'minute') {
         const state = this.states.get(chatId);
-        if (!state?.title || !state.date || state.hour === undefined) return;
+        if (
+          !state ||
+          !('step' in state) ||
+          !state.date ||
+          state.hour === undefined
+        )
+          return;
+        if ('flow' in state && state.flow === 'edit') {
+          const task = await this.tasks.updateTask(
+            BigInt(chatId),
+            state.taskId,
+            {
+              deadline: this.parseWibDate(
+                `${state.date}T${String(state.hour).padStart(2, '0')}:${value}`,
+              ),
+            },
+          );
+          this.states.delete(chatId);
+          await ctx.editMessageText(
+            `Deadline task berhasil diubah.\n${this.formatTaskLine(task)}`,
+            this.taskKeyboard([{ id: task.id }]),
+          );
+          return;
+        }
+        if (!state.title) return;
         await this.createTask(
           ctx,
           state.title,
@@ -297,9 +396,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       } else if (action === 'complete') {
         await this.tasks.complete(value, BigInt(chatId));
         await ctx.editMessageText('Yay, satu task kelar! 🎉');
+      } else if (action === 'edit') {
+        await this.beginEdit(ctx, value);
+      } else if (action === 'edit-title') {
+        this.states.set(chatId, { flow: 'edit', step: 'title', taskId: value });
+        await ctx.editMessageText('Kirim judul baru buat task ini ya.');
+      } else if (action === 'edit-deadline') {
+        this.states.set(chatId, { flow: 'edit', step: 'date', taskId: value });
+        const now = this.wibNow();
+        await ctx.editMessageText(
+          'Pilih deadline baru:',
+          this.calendarKeyboard(now.year, now.month - 1),
+        );
+      } else if (action === 'edit-status') {
+        await ctx.editMessageText(
+          'Pilih status baru:',
+          this.editStatusKeyboard(value),
+        );
+      } else if (action === 'set-status') {
+        const task = await this.tasks.updateTask(BigInt(chatId), taskId, {
+          status: value as 'PENDING' | 'COMPLETED' | 'OVERDUE',
+        });
+        this.states.delete(chatId);
+        await ctx.editMessageText(
+          `Status task berhasil diubah.\n${this.formatTaskLine(task)}`,
+          this.taskKeyboard([{ id: task.id }]),
+        );
       } else if (action === 'delete') {
         await this.tasks.remove(value, BigInt(chatId));
         await ctx.editMessageText('Oke, task-nya udah dihapus.');
+      } else if (action === 'bulk') {
+        await this.handleBulkDeleteCallback(ctx, value, taskId);
       } else if (action === 'snooze') {
         await this.tasks.snooze(taskId, Number(value), BigInt(chatId));
         await ctx.editMessageText(`Oke, aku ingetin lagi ${value} menit lagi.`);
@@ -320,14 +447,149 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async handleBulkDeleteCallback(
+    ctx: BotContext,
+    value: string,
+    taskId?: string,
+  ): Promise<void> {
+    const chatId = this.chatId(ctx);
+    if (!chatId) return;
+
+    if (value === 'cancel') {
+      this.states.delete(chatId);
+      await ctx.editMessageText('Bulk delete dibatalkan.');
+      return;
+    }
+
+    if (value === 'all-completed' || value === 'all-pending') {
+      const status = value === 'all-completed' ? 'COMPLETED' : 'PENDING';
+      const result = await this.tasks.bulkDeleteByStatus(
+        BigInt(chatId),
+        status,
+      );
+      this.states.delete(chatId);
+      await ctx.editMessageText(
+        result.deletedCount
+          ? `${result.deletedCount} task berhasil dihapus.`
+          : 'Nggak ada task dengan status itu.',
+      );
+      return;
+    }
+
+    const state = this.states.get(chatId);
+    if (!state || !('flow' in state) || state.flow !== 'bulk-delete') {
+      await ctx.editMessageText(
+        'Sesi bulk delete sudah selesai. Jalankan /bulkdelete lagi ya.',
+      );
+      return;
+    }
+
+    if (value === 'toggle' && taskId) {
+      if (state.selectedTaskIds.has(taskId))
+        state.selectedTaskIds.delete(taskId);
+      else state.selectedTaskIds.add(taskId);
+      const tasks = await this.tasks.listForBulkDelete(BigInt(chatId));
+      await ctx.editMessageText(
+        this.bulkDeleteMessage(tasks, state.selectedTaskIds),
+        this.bulkDeleteKeyboard(tasks, state.selectedTaskIds),
+      );
+      return;
+    }
+
+    if (value === 'confirm') {
+      const taskIds = [...state.selectedTaskIds];
+      if (!taskIds.length) {
+        await ctx.answerCbQuery('Pilih minimal satu task dulu.');
+        return;
+      }
+      const result = await this.tasks.bulkDelete(BigInt(chatId), taskIds);
+      this.states.delete(chatId);
+      await ctx.editMessageText(
+        `${result.deletedCount} task berhasil dihapus.`,
+      );
+    }
+  }
+
   private taskKeyboard(tasks: Array<{ id: string }>) {
     return Markup.inlineKeyboard(
       tasks.map((task) => [
         Markup.button.callback('✓ Selesai', `complete:${task.id}`),
+        Markup.button.callback('Edit', `edit:${task.id}`),
         Markup.button.callback('Snooze', `snooze-menu:${task.id}`),
         Markup.button.callback('🗑 Hapus', `delete:${task.id}`),
       ]),
     );
+  }
+
+  private editFieldKeyboard(taskId: string) {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback('Judul', `edit-title:${taskId}`)],
+      [Markup.button.callback('Deadline', `edit-deadline:${taskId}`)],
+      [Markup.button.callback('Status', `edit-status:${taskId}`)],
+    ]);
+  }
+
+  private editStatusKeyboard(taskId: string) {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback('Pending', `set-status:PENDING:${taskId}`)],
+      [Markup.button.callback('Selesai', `set-status:COMPLETED:${taskId}`)],
+      [Markup.button.callback('Overdue', `set-status:OVERDUE:${taskId}`)],
+    ]);
+  }
+
+  private bulkDeleteKeyboard(
+    tasks: Array<{ id: string; title: string }>,
+    selectedTaskIds: Set<string>,
+  ) {
+    const rows = tasks
+      .slice(0, 20)
+      .map((task) => [
+        Markup.button.callback(
+          `${selectedTaskIds.has(task.id) ? '[x]' : '[ ]'} ${this.truncate(task.title, 28)}`,
+          `bulk:toggle:${task.id}`,
+        ),
+      ]);
+    rows.push(
+      [Markup.button.callback('Hapus yang dipilih', 'bulk:confirm')],
+      [
+        Markup.button.callback('Hapus semua completed', 'bulk:all-completed'),
+        Markup.button.callback('Hapus semua pending', 'bulk:all-pending'),
+      ],
+      [Markup.button.callback('Batal', 'bulk:cancel')],
+    );
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private bulkDeleteMessage(
+    tasks: Array<{ title: string; deadline: Date | string; status: string }>,
+    selectedTaskIds: Set<string>,
+  ): string {
+    return [
+      'Pilih task yang mau dihapus:',
+      '',
+      ...tasks
+        .slice(0, 20)
+        .map(
+          (task, index) =>
+            `${index + 1}. [${task.status}] ${task.title} - ${this.formatDate(task.deadline)}`,
+        ),
+      '',
+      `${selectedTaskIds.size} task dipilih.`,
+    ].join('\n');
+  }
+
+  private formatTaskLine(task: {
+    title: string;
+    deadline: Date | string;
+    status: string;
+  }): string {
+    return `${task.title}\nStatus: ${task.status}\nDeadline: ${this.formatDate(task.deadline)}`;
+  }
+
+  private truncate(value: string, maxLength: number): string {
+    return value.length > maxLength
+      ? `${value.slice(0, Math.max(0, maxLength - 3))}...`
+      : value;
   }
 
   private async sendCalendar(

@@ -8,7 +8,12 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import type { CreateTaskDto, UpdateDeadlineDto } from './task.dto.js';
+import type {
+  BulkDeleteTasksDto,
+  CreateTaskDto,
+  UpdateDeadlineDto,
+  UpdateTaskDto,
+} from './task.dto.js';
 import { TasksService } from './tasks.service.js';
 
 @Controller('tasks')
@@ -53,6 +58,30 @@ export class TasksController {
       id,
       body,
       this.tasksService.parseUserId(userId),
+    );
+  }
+
+  @Patch(':id')
+  updateTask(
+    @Param('id') id: string,
+    @Body() body: UpdateTaskDto,
+    @Query('userId') userId?: string,
+  ) {
+    return this.tasksService.updateTask(
+      this.tasksService.parseUserId(userId),
+      id,
+      body,
+    );
+  }
+
+  @Delete()
+  bulkDelete(
+    @Body() body: BulkDeleteTasksDto,
+    @Query('userId') userId?: string,
+  ) {
+    return this.tasksService.bulkDelete(
+      this.tasksService.parseUserId(userId),
+      body.taskIds,
     );
   }
 

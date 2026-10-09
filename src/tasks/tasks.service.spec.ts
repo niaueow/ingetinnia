@@ -22,6 +22,7 @@ describe('TasksService', () => {
       update: vi.fn(),
       updateMany: vi.fn(),
       delete: vi.fn(),
+      deleteMany: vi.fn(),
     },
     reminder: {
       deleteMany: vi.fn(),
@@ -36,6 +37,7 @@ describe('TasksService', () => {
     prisma.task.findFirst.mockResolvedValue(task);
     prisma.task.update.mockResolvedValue({ ...task, status: 'COMPLETED' });
     prisma.task.updateMany.mockResolvedValue({ count: 0 });
+    prisma.task.deleteMany.mockResolvedValue({ count: 2 });
     prisma.reminder.deleteMany.mockResolvedValue({ count: 0 });
     prisma.reminder.createMany.mockResolvedValue({ count: 1 });
     prisma.reminder.updateMany.mockResolvedValue({ count: 1 });
@@ -87,5 +89,37 @@ describe('TasksService', () => {
       where: { taskId: 'task-1', status: 'PENDING' },
       data: { status: 'CANCELLED' },
     });
+  });
+
+  it('updates only a task owned by the user', async () => {
+    const service = new TasksService(prisma as never);
+    prisma.task.update.mockResolvedValue({ ...task, title: 'Belajar NestJS' });
+
+    const result = await service.updateTask(1n, 'task-1', {
+      title: '  Belajar NestJS  ',
+    });
+
+    expect(prisma.task.findFirst).toHaveBeenCalledWith({
+      where: { id: 'task-1', userId: 1n },
+      select: expect.any(Object),
+    });
+    expect(prisma.task.update).toHaveBeenCalledWith({
+      where: { id: 'task-1', userId: 1n },
+      data: { title: 'Belajar NestJS' },
+      select: expect.any(Object),
+    });
+    expect(result.title).toBe('Belajar NestJS');
+  });
+
+  it('bulk deletes tasks with user isolation and no per-task loop', async () => {
+    const service = new TasksService(prisma as never);
+
+    const result = await service.bulkDelete(1n, ['task-1', 'task-2', 'task-1']);
+
+    expect(prisma.task.deleteMany).toHaveBeenCalledTimes(1);
+    expect(prisma.task.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 1n, id: { in: ['task-1', 'task-2'] } },
+    });
+    expect(result).toEqual({ deletedCount: 2, requestedCount: 2 });
   });
 });

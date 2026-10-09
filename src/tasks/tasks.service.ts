@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service.js';
-import { CreateTaskDto, UpdateDeadlineDto } from './task.dto.js';
+import { CreateTaskDto, UpdateDeadlineDto, UpdateTaskDto } from './task.dto.js';
 
 const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
 const DEFAULT_USER_ID = 1n;
@@ -117,6 +117,16 @@ export class TasksService {
     return tasks.map((task) => this.serializeTask(task));
   }
 
+  async listForBulkDelete(userId: bigint) {
+    await this.markOverdue(userId);
+    const tasks = await this.prisma.task.findMany({
+      where: { userId, status: { in: ['PENDING', 'OVERDUE', 'COMPLETED'] } },
+      orderBy: [{ status: 'asc' }, { deadline: 'asc' }],
+      select: TASK_SELECT,
+    });
+    return tasks.map((task) => this.serializeTask(task));
+  }
+
   async complete(id: string, userId: bigint) {
     await this.findOwnedTask(id, userId);
     const task = await this.prisma.task.update({
@@ -159,10 +169,93 @@ export class TasksService {
     return this.serializeTask(task);
   }
 
+  async updateTask(userId: bigint, taskId: string, updateData: UpdateTaskDto) {
+    await this.findOwnedTask(taskId, userId);
+
+    const data: Prisma.TaskUpdateInput = {};
+    const title = updateData.title?.trim();
+    if (updateData.title !== undefined) {
+      if (!title) throw new BadRequestException('Judul task wajib diisi.');
+      data.title = title;
+    }
+    if (updateData.deadline !== undefined) {
+      data.deadline = this.parseFutureDeadline(updateData.deadline);
+    }
+    if (updateData.status !== undefined) {
+      if (!['PENDING', 'COMPLETED', 'OVERDUE'].includes(updateData.status)) {
+        throw new BadRequestException('Status task tidak valid.');
+      }
+      data.status = updateData.status;
+      data.completedAt = updateData.status === 'COMPLETED' ? new Date() : null;
+    }
+    if (!Object.keys(data).length) {
+      throw new BadRequestException('Tidak ada data task yang diubah.');
+    }
+    if (data.deadline && updateData.status === undefined) {
+      data.status = 'PENDING';
+      data.completedAt = null;
+    }
+
+    const task = await this.prisma.task.update({
+      where: { id: taskId, userId },
+      data,
+      select: TASK_SELECT,
+    });
+
+    if (data.deadline instanceof Date) {
+      if (task.status === 'COMPLETED') {
+        await this.prisma.reminder.updateMany({
+          where: { taskId, status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+      } else {
+        await this.replaceReminders(taskId, data.deadline);
+      }
+    } else if (updateData.status === 'COMPLETED') {
+      await this.prisma.reminder.updateMany({
+        where: { taskId, status: 'PENDING' },
+        data: { status: 'CANCELLED' },
+      });
+    } else if (updateData.status === 'PENDING') {
+      await this.replaceReminders(taskId, task.deadline);
+    }
+
+    return this.serializeTask(task);
+  }
+
   async remove(id: string, userId: bigint) {
     await this.findOwnedTask(id, userId);
     await this.prisma.task.delete({ where: { id } });
     return { message: 'Oke, task-nya udah dihapus.' };
+  }
+
+  async bulkDelete(userId: bigint, taskIds: string[]) {
+    const uniqueTaskIds = [...new Set(taskIds.map((id) => id.trim()))].filter(
+      Boolean,
+    );
+    if (!uniqueTaskIds.length) {
+      throw new BadRequestException('Pilih minimal satu task untuk dihapus.');
+    }
+    const result = await this.prisma.task.deleteMany({
+      where: { userId, id: { in: uniqueTaskIds } },
+    });
+    if (!result.count) {
+      throw new NotFoundException('Task tidak ditemukan.');
+    }
+    return {
+      deletedCount: result.count,
+      requestedCount: uniqueTaskIds.length,
+    };
+  }
+
+  async bulkDeleteByStatus(
+    userId: bigint,
+    status: 'PENDING' | 'COMPLETED' | 'OVERDUE',
+  ) {
+    const result = await this.prisma.task.deleteMany({
+      where: { userId, status },
+    });
+    return { deletedCount: result.count };
   }
 
   async snooze(id: string, minutes: number, userId: bigint) {
