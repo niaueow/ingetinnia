@@ -45,7 +45,10 @@ describe('TasksService', () => {
     const service = new TasksService(prisma as never);
 
     await expect(
-      service.create({ title: 'Task lama', deadline: '2020-01-01T00:00:00.000Z' }),
+      service.create({
+        title: 'Task lama',
+        deadline: '2020-01-01T00:00:00.000Z',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.task.create).not.toHaveBeenCalled();
   });
@@ -64,6 +67,7 @@ describe('TasksService', () => {
         deadline: new Date('2099-10-10T16:59:00.000Z'),
         userId: 1n,
       },
+      select: expect.any(Object),
     });
     expect(prisma.reminder.createMany).toHaveBeenCalled();
     expect(result.userId).toBe('1');
@@ -77,6 +81,7 @@ describe('TasksService', () => {
     expect(prisma.task.update).toHaveBeenCalledWith({
       where: { id: 'task-1' },
       data: { status: 'COMPLETED', completedAt: expect.any(Date) },
+      select: expect.any(Object),
     });
     expect(prisma.reminder.updateMany).toHaveBeenCalledWith({
       where: { taskId: 'task-1', status: 'PENDING' },

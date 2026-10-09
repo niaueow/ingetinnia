@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import type { CreateTaskDto, UpdateDeadlineDto } from './task.dto.js';
 import { TasksService } from './tasks.service.js';
 
@@ -28,7 +37,10 @@ export class TasksController {
 
   @Patch(':id/complete')
   complete(@Param('id') id: string, @Query('userId') userId?: string) {
-    return this.tasksService.complete(id, this.tasksService.parseUserId(userId));
+    return this.tasksService.complete(
+      id,
+      this.tasksService.parseUserId(userId),
+    );
   }
 
   @Patch(':id/deadline')
@@ -37,7 +49,11 @@ export class TasksController {
     @Body() body: UpdateDeadlineDto,
     @Query('userId') userId?: string,
   ) {
-    return this.tasksService.updateDeadline(id, body, this.tasksService.parseUserId(userId));
+    return this.tasksService.updateDeadline(
+      id,
+      body,
+      this.tasksService.parseUserId(userId),
+    );
   }
 
   @Delete(':id')

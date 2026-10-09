@@ -1,9 +1,32 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service.js';
 import { CreateTaskDto, UpdateDeadlineDto } from './task.dto.js';
 
 const WIB_OFFSET_MS = 7 * 60 * 60 * 1000;
 const DEFAULT_USER_ID = 1n;
+const TASK_SELECT = {
+  id: true,
+  userId: true,
+  title: true,
+  deadline: true,
+  status: true,
+  createdAt: true,
+  completedAt: true,
+  updatedAt: true,
+} satisfies Prisma.TaskSelect;
+const PENDING_REMINDER_SELECT = {
+  id: true,
+  taskId: true,
+  reminderType: true,
+  scheduledAt: true,
+  sentAt: true,
+  status: true,
+} satisfies Prisma.ReminderSelect;
 
 @Injectable()
 export class TasksService {
@@ -26,9 +49,10 @@ export class TasksService {
     const userId = this.parseUserId(input.userId?.toString());
     const task = await this.prisma.task.create({
       data: { title, deadline, userId },
+      select: TASK_SELECT,
     });
     await this.replaceReminders(task.id, deadline);
-    return this.serializeTask(await this.findOwnedTask(task.id, userId));
+    return this.serializeTask(task);
   }
 
   async listActive(userId: bigint) {
@@ -36,7 +60,14 @@ export class TasksService {
     const tasks = await this.prisma.task.findMany({
       where: { userId, status: { in: ['PENDING', 'OVERDUE'] } },
       orderBy: { deadline: 'asc' },
-      include: { reminders: { where: { status: 'PENDING' }, orderBy: { scheduledAt: 'asc' } } },
+      select: {
+        ...TASK_SELECT,
+        reminders: {
+          where: { status: 'PENDING' },
+          orderBy: { scheduledAt: 'asc' },
+          select: PENDING_REMINDER_SELECT,
+        },
+      },
     });
     return tasks.map((task) => this.serializeTask(task));
   }
@@ -51,6 +82,7 @@ export class TasksService {
         deadline: { gte: start, lt: end },
       },
       orderBy: { deadline: 'asc' },
+      select: TASK_SELECT,
     });
     return tasks.map((task) => this.serializeTask(task));
   }
@@ -65,6 +97,7 @@ export class TasksService {
         deadline: { gte: start, lt: end },
       },
       orderBy: { deadline: 'asc' },
+      select: TASK_SELECT,
     });
     return tasks.map((task) => this.serializeTask(task));
   }
@@ -79,6 +112,7 @@ export class TasksService {
         deadline: { gte: end },
       },
       orderBy: { deadline: 'asc' },
+      select: TASK_SELECT,
     });
     return tasks.map((task) => this.serializeTask(task));
   }
@@ -88,6 +122,7 @@ export class TasksService {
     const task = await this.prisma.task.update({
       where: { id },
       data: { status: 'COMPLETED', completedAt: new Date() },
+      select: TASK_SELECT,
     });
     await this.prisma.reminder.updateMany({
       where: { taskId: id, status: 'PENDING' },
@@ -97,13 +132,18 @@ export class TasksService {
   }
 
   async completeByTitle(title: string, userId: bigint) {
-    const tasks = await this.prisma.task.findMany({
-      where: { userId, status: { in: ['PENDING', 'OVERDUE'] } },
+    const normalizedTitle = title.trim();
+    const task = await this.prisma.task.findFirst({
+      where: {
+        userId,
+        status: { in: ['PENDING', 'OVERDUE'] },
+        title: { equals: normalizedTitle, mode: 'insensitive' },
+      },
       orderBy: { deadline: 'asc' },
+      select: { id: true },
     });
-    const normalizedTitle = title.trim().toLocaleLowerCase();
-    const task = tasks.find((item) => item.title.trim().toLocaleLowerCase() === normalizedTitle);
-    if (!task) throw new NotFoundException('Task dengan judul itu tidak ditemukan.');
+    if (!task)
+      throw new NotFoundException('Task dengan judul itu tidak ditemukan.');
     return this.complete(task.id, userId);
   }
 
@@ -113,6 +153,7 @@ export class TasksService {
     const task = await this.prisma.task.update({
       where: { id },
       data: { deadline, status: 'PENDING', completedAt: null },
+      select: TASK_SELECT,
     });
     await this.replaceReminders(id, deadline);
     return this.serializeTask(task);
@@ -141,7 +182,10 @@ export class TasksService {
   }
 
   private async findOwnedTask(id: string, userId: bigint) {
-    const task = await this.prisma.task.findFirst({ where: { id, userId } });
+    const task = await this.prisma.task.findFirst({
+      where: { id, userId },
+      select: TASK_SELECT,
+    });
     if (!task) throw new NotFoundException('Task tidak ditemukan.');
     return task;
   }
@@ -153,8 +197,10 @@ export class TasksService {
   private parseFutureDeadline(value?: string): Date {
     if (!value) throw new BadRequestException('Deadline wajib diisi.');
     const deadline = new Date(value);
-    if (Number.isNaN(deadline.getTime())) throw new BadRequestException('Format deadline tidak valid.');
-    if (deadline.getTime() <= Date.now()) throw new BadRequestException('Deadline harus berada di masa depan.');
+    if (Number.isNaN(deadline.getTime()))
+      throw new BadRequestException('Format deadline tidak valid.');
+    if (deadline.getTime() <= Date.now())
+      throw new BadRequestException('Deadline harus berada di masa depan.');
     return deadline;
   }
 
@@ -165,8 +211,13 @@ export class TasksService {
     });
   }
 
-  private async replaceReminders(taskId: string, deadline: Date): Promise<void> {
-    await this.prisma.reminder.deleteMany({ where: { taskId, status: 'PENDING' } });
+  private async replaceReminders(
+    taskId: string,
+    deadline: Date,
+  ): Promise<void> {
+    await this.prisma.reminder.deleteMany({
+      where: { taskId, status: 'PENDING' },
+    });
     const now = Date.now();
     const candidates: Date[] = [];
     const remaining = deadline.getTime() - now;
@@ -174,7 +225,8 @@ export class TasksService {
     if (remaining > 24 * 60 * 60 * 1000) {
       const firstReminder = new Date(now + WIB_OFFSET_MS);
       firstReminder.setUTCHours(2, 0, 0, 0);
-      if (firstReminder.getTime() <= now + WIB_OFFSET_MS) firstReminder.setUTCDate(firstReminder.getUTCDate() + 1);
+      if (firstReminder.getTime() <= now + WIB_OFFSET_MS)
+        firstReminder.setUTCDate(firstReminder.getUTCDate() + 1);
       for (let day = 0; day <= 365; day += 1) {
         const localReminder = new Date(firstReminder);
         localReminder.setUTCDate(localReminder.getUTCDate() + day);
@@ -197,13 +249,14 @@ export class TasksService {
       await this.prisma.reminder.createMany({
         data: candidates.map((scheduledAt) => ({
           taskId,
-          reminderType: scheduledAt.getTime() === deadline.getTime()
-            ? 'OVERDUE'
-            : scheduledAt.getTime() === tenMinuteReminder.getTime()
-              ? 'TEN_MINUTES'
-              : remaining > 24 * 60 * 60 * 1000
-                ? 'DAILY'
-                : 'NEAR_DEADLINE',
+          reminderType:
+            scheduledAt.getTime() === deadline.getTime()
+              ? 'OVERDUE'
+              : scheduledAt.getTime() === tenMinuteReminder.getTime()
+                ? 'TEN_MINUTES'
+                : remaining > 24 * 60 * 60 * 1000
+                  ? 'DAILY'
+                  : 'NEAR_DEADLINE',
           scheduledAt,
         })),
         skipDuplicates: true,

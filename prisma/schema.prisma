@@ -26,6 +26,8 @@ model Task {
   updatedAt   DateTime    @updatedAt @map("updated_at")
   reminders   Reminder[]
 
+  @@index([userId, status, deadline])
+  @@index([status, deadline])
   @@map("tasks")
 }
 
@@ -38,5 +40,8 @@ model Reminder {
   sentAt       DateTime? @map("sent_at")
   status       String    @default("PENDING")
 
+  @@unique([taskId, reminderType, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([taskId, status])
   @@map("reminders")
 }

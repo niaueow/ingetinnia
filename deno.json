@@ -7,7 +7,7 @@
     "noImplicitAny": false
   },
   "nodeModulesDir": "auto",
-  "exclude": ["node_modules", "test", "**/*.spec.ts", "vitest.config*.ts"],
+  "exclude": ["node_modules", "test", "**/*.spec.ts", "vitest.config*.*"],
   "tasks": {
     "build": "npm run prisma:generate && nest build --path tsconfig.build.json"
   }
