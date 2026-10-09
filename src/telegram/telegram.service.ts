@@ -490,7 +490,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             data: { status: 'SENT', sentAt: new Date() },
           });
         } catch (error) {
-          this.logger.error(`Gagal mengirim reminder ${reminder.id}`, error);
+          if (this.isPermanentRecipientError(error)) {
+            await this.prisma.reminder.update({
+              where: { id: reminder.id },
+              data: { status: 'CANCELLED' },
+            });
+            this.logger.warn(
+              `Reminder ${reminder.id} dibatalkan karena chat Telegram ` +
+                `${reminder.task.userId.toString()} tidak dapat diakses. ` +
+                'Pastikan pengguna sudah mengirim /start ke bot dan task memakai chat ID yang benar.',
+            );
+          } else {
+            this.logger.error(`Gagal mengirim reminder ${reminder.id}`, error);
+          }
         }
       }
     } catch (error) {
@@ -523,6 +535,29 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private chatId(ctx: BotContext): number | undefined {
     return ctx.chat?.id ?? ctx.from?.id;
+  }
+
+  private isPermanentRecipientError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+
+    const response = 'response' in error ? error.response : undefined;
+    if (!response || typeof response !== 'object') return false;
+
+    const errorCode =
+      'error_code' in response && typeof response.error_code === 'number'
+        ? response.error_code
+        : undefined;
+    const description =
+      'description' in response && typeof response.description === 'string'
+        ? response.description.toLowerCase()
+        : '';
+
+    return (
+      (errorCode === 400 && description.includes('chat not found')) ||
+      (errorCode === 403 &&
+        (description.includes('bot was blocked') ||
+          description.includes('user is deactivated')))
+    );
   }
 
   private parseWibDate(value: string): string {
