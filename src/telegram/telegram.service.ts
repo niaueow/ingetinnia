@@ -156,10 +156,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const url = this.googleCalendar.getAuthUrl(chatId.toString());
       await ctx.reply(
         [
-          'Buka <a href="${url}">link ini</a> buat menyambungkan Google Calendar:',
+          'Buka <a href="' + url + '">link ini</a> buat menyambungkan Google Calendar:',
+          url,
           '',
           'Setelah login berhasil, balik lagi ke bot ini ya.',
         ].join('\n'),
+        { parse_mode: 'HTML' }
       );
     } catch (error) {
       await ctx.reply(
