@@ -15,19 +15,39 @@ enum TaskStatus {
   OVERDUE
 }
 
+enum GoogleSyncJobOperation {
+  UPSERT_EVENT
+  DELETE_EVENT
+  POLL_EVENTS
+}
+
+enum GoogleSyncJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model Task {
-  id          String      @id @default(uuid())
-  userId      BigInt      @map("user_id")
-  title       String
-  deadline    DateTime
-  status      TaskStatus  @default(PENDING)
-  createdAt   DateTime    @default(now()) @map("created_at")
-  completedAt DateTime?   @map("completed_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
-  reminders   Reminder[]
+  id                     String          @id @default(uuid())
+  userId                 BigInt          @map("user_id")
+  title                  String
+  deadline               DateTime
+  status                 TaskStatus      @default(PENDING)
+  googleCalendarId       String?         @map("google_calendar_id")
+  googleEventId          String?         @map("google_event_id")
+  googleEventUpdatedAt   DateTime?       @map("google_event_updated_at")
+  lastSyncedToGoogleAt   DateTime?       @map("last_synced_to_google_at")
+  lastSyncedFromGoogleAt DateTime?       @map("last_synced_from_google_at")
+  createdAt              DateTime        @default(now()) @map("created_at")
+  completedAt            DateTime?       @map("completed_at")
+  updatedAt              DateTime        @updatedAt @map("updated_at")
+  reminders              Reminder[]
+  googleSyncJobs         GoogleSyncJob[]
 
   @@index([userId, status, deadline])
   @@index([status, deadline])
+  @@index([userId, googleEventId])
   @@map("tasks")
 }
 
@@ -44,4 +64,44 @@ model Reminder {
   @@index([status, scheduledAt])
   @@index([taskId, status])
   @@map("reminders")
+}
+
+model GoogleAccount {
+  userId       BigInt    @id @map("user_id")
+  googleUserId String?   @map("google_user_id")
+  email        String?
+  accessToken  String?   @map("access_token")
+  refreshToken String?   @map("refresh_token")
+  tokenExpiry  DateTime? @map("token_expiry")
+  scopes       String?
+  calendarId   String    @default("primary") @map("calendar_id")
+  syncToken    String?   @map("sync_token")
+  lastPolledAt DateTime? @map("last_polled_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([revokedAt])
+  @@map("google_accounts")
+}
+
+model GoogleSyncJob {
+  id        String                 @id @default(uuid())
+  userId    BigInt                 @map("user_id")
+  taskId    String?                @map("task_id")
+  operation GoogleSyncJobOperation
+  payload   Json?
+  status    GoogleSyncJobStatus    @default(PENDING)
+  attempts  Int                    @default(0)
+  runAfter  DateTime               @default(now()) @map("run_after")
+  lockedAt  DateTime?              @map("locked_at")
+  lastError String?                @map("last_error")
+  createdAt DateTime               @default(now()) @map("created_at")
+  updatedAt DateTime               @updatedAt @map("updated_at")
+  task      Task?                  @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([status, runAfter])
+  @@index([userId, status])
+  @@index([taskId, operation, status])
+  @@map("google_sync_jobs")
 }

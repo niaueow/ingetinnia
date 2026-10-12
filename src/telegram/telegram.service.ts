@@ -5,6 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { GoogleCalendarService } from '../google-calendar/google-calendar.service.js';
 import { PrismaService } from '../prisma.service.js';
 import { TasksService } from '../tasks/tasks.service.js';
 import { Context, Markup, Telegraf } from 'telegraf';
@@ -57,6 +58,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly tasks: TasksService,
+    private readonly googleCalendar: GoogleCalendarService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -109,6 +111,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     bot.command('done', (ctx) => this.completeFromCommand(ctx));
     bot.command('bulkdelete', (ctx) => this.beginBulkDelete(ctx));
     bot.command('edit', (ctx) => this.beginEditFromCommand(ctx));
+    bot.command('connect_gcal', (ctx) => this.connectGoogleCalendar(ctx));
 
     bot.on('callback_query', async (ctx) => {
       const callback = ctx.callbackQuery;
@@ -140,9 +143,32 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/done <judul> - selesaikan task',
       '/edit <taskId> - edit judul, deadline, atau status task',
       '/bulkdelete - hapus beberapa task sekaligus',
+      '/connect_gcal - sambungkan Google Calendar',
       '',
       'Deadline dipilih lewat kalender WIB setelah judul task diisi.',
     ].join('\n');
+  }
+
+  private async connectGoogleCalendar(ctx: BotContext): Promise<void> {
+    const chatId = this.chatId(ctx);
+    if (!chatId) return;
+    try {
+      const url = this.googleCalendar.getAuthUrl(chatId.toString());
+      await ctx.reply(
+        [
+          'Buka link ini buat menyambungkan Google Calendar:',
+          url,
+          '',
+          'Setelah login berhasil, balik lagi ke bot ini ya.',
+        ].join('\n'),
+      );
+    } catch (error) {
+      await ctx.reply(
+        error instanceof Error
+          ? error.message
+          : 'Google Calendar belum bisa disambungkan.',
+      );
+    }
   }
 
   private async beginAdd(ctx: BotContext): Promise<void> {

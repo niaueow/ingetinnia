@@ -18,16 +18,23 @@ Create `.env` in the workspace root or this folder:
 DATABASE_URL=
 DIRECT_URL=
 TELEGRAM_BOT_TOKEN=
+TELEGRAM_BOT_USERNAME=
 DISABLE_TELEGRAM=false
 PORT=3000
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=http://localhost:3000/google-calendar/callback
+GOOGLE_TOKEN_ENCRYPTION_KEY=
 ```
 
 For Supabase, use the pooler URL for `DATABASE_URL` at runtime and the direct database URL for `DIRECT_URL` during migrations.
+The app is designed for a local home server: Telegram uses long polling, and Google Calendar inbound sync uses cron polling with `syncToken`.
+Do not configure Telegram webhooks or Google Calendar Watch/webhooks for this deployment.
 
 ```bash
 npm install --legacy-peer-deps
 npm run prisma:generate
-npx prisma migrate deploy --schema ../prisma/schema.prisma
+npx prisma migrate deploy --schema prisma/schema.prisma
 npm run build
 npm run start:prod
 ```
@@ -77,6 +84,7 @@ Available commands:
 /done <judul>
 /edit <taskId>
 /bulkdelete
+/connect_gcal
 /help
 ```
 
@@ -87,3 +95,11 @@ checkboxes, plus actions for deleting all completed or all pending tasks.
 The reminder worker runs every 30 seconds, sends pending reminders in batches, and marks overdue tasks.
 If Telegram reports that a recipient chat does not exist, is blocked, or is deactivated,
 the affected reminder is marked `CANCELLED` so the worker does not retry it forever.
+
+## Google Calendar Sync
+
+Run `/connect_gcal` in Telegram to get a Google OAuth URL. After authorization,
+the callback stores encrypted tokens per Telegram chat ID and enqueues a polling sync.
+Task creates, edits, completions, deletes, and bulk deletes enqueue background jobs so
+bot replies stay fast. A scheduler processes outbound jobs every 10 seconds and polls
+Google Calendar every 5 minutes with incremental `syncToken` updates.

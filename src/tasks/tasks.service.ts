@@ -1,9 +1,12 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import { GoogleCalendarService } from '../google-calendar/google-calendar.service.js';
 import { PrismaService } from '../prisma.service.js';
 import { CreateTaskDto, UpdateDeadlineDto, UpdateTaskDto } from './task.dto.js';
 
@@ -15,6 +18,11 @@ const TASK_SELECT = {
   title: true,
   deadline: true,
   status: true,
+  googleCalendarId: true,
+  googleEventId: true,
+  googleEventUpdatedAt: true,
+  lastSyncedToGoogleAt: true,
+  lastSyncedFromGoogleAt: true,
   createdAt: true,
   completedAt: true,
   updatedAt: true,
@@ -30,7 +38,13 @@ const PENDING_REMINDER_SELECT = {
 
 @Injectable()
 export class TasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(TasksService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional()
+    private readonly googleCalendar?: GoogleCalendarService,
+  ) {}
 
   parseUserId(value?: string): bigint {
     if (!value) return DEFAULT_USER_ID;
@@ -52,6 +66,7 @@ export class TasksService {
       select: TASK_SELECT,
     });
     await this.replaceReminders(task.id, deadline);
+    this.enqueueGoogleUpsert(task);
     return this.serializeTask(task);
   }
 
@@ -138,6 +153,7 @@ export class TasksService {
       where: { taskId: id, status: 'PENDING' },
       data: { status: 'CANCELLED' },
     });
+    this.enqueueGoogleUpsert(task);
     return this.serializeTask(task);
   }
 
@@ -166,6 +182,7 @@ export class TasksService {
       select: TASK_SELECT,
     });
     await this.replaceReminders(id, deadline);
+    this.enqueueGoogleUpsert(task);
     return this.serializeTask(task);
   }
 
@@ -220,12 +237,14 @@ export class TasksService {
       await this.replaceReminders(taskId, task.deadline);
     }
 
+    this.enqueueGoogleUpsert(task);
     return this.serializeTask(task);
   }
 
   async remove(id: string, userId: bigint) {
-    await this.findOwnedTask(id, userId);
+    const task = await this.findOwnedTask(id, userId);
     await this.prisma.task.delete({ where: { id } });
+    this.enqueueGoogleDelete(task);
     return { message: 'Oke, task-nya udah dihapus.' };
   }
 
@@ -236,12 +255,22 @@ export class TasksService {
     if (!uniqueTaskIds.length) {
       throw new BadRequestException('Pilih minimal satu task untuk dihapus.');
     }
+    const tasks = await this.prisma.task.findMany({
+      where: { userId, id: { in: uniqueTaskIds } },
+      select: {
+        id: true,
+        userId: true,
+        googleCalendarId: true,
+        googleEventId: true,
+      },
+    });
     const result = await this.prisma.task.deleteMany({
       where: { userId, id: { in: uniqueTaskIds } },
     });
     if (!result.count) {
       throw new NotFoundException('Task tidak ditemukan.');
     }
+    for (const task of tasks) this.enqueueGoogleDelete(task);
     return {
       deletedCount: result.count,
       requestedCount: uniqueTaskIds.length,
@@ -252,9 +281,19 @@ export class TasksService {
     userId: bigint,
     status: 'PENDING' | 'COMPLETED' | 'OVERDUE',
   ) {
+    const tasks = await this.prisma.task.findMany({
+      where: { userId, status },
+      select: {
+        id: true,
+        userId: true,
+        googleCalendarId: true,
+        googleEventId: true,
+      },
+    });
     const result = await this.prisma.task.deleteMany({
       where: { userId, status },
     });
+    for (const task of tasks) this.enqueueGoogleDelete(task);
     return { deletedCount: result.count };
   }
 
@@ -355,6 +394,48 @@ export class TasksService {
         skipDuplicates: true,
       });
     }
+  }
+
+  private enqueueGoogleUpsert(task: {
+    id: string;
+    userId: bigint;
+    title: string;
+    deadline: Date;
+    status: 'PENDING' | 'COMPLETED' | 'OVERDUE';
+    googleCalendarId: string | null;
+    googleEventId: string | null;
+    googleEventUpdatedAt: Date | null;
+    updatedAt: Date;
+  }): void {
+    void this.googleCalendar?.enqueueTaskUpsert(task).catch((error) => {
+      this.logger.warn(
+        `Gagal enqueue Google Calendar upsert untuk task ${task.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+  }
+
+  private enqueueGoogleDelete(task: {
+    id: string;
+    userId: bigint;
+    googleCalendarId?: string | null;
+    googleEventId?: string | null;
+  }): void {
+    void this.googleCalendar
+      ?.enqueueTaskDelete({
+        userId: task.userId,
+        taskId: task.id,
+        googleCalendarId: task.googleCalendarId,
+        googleEventId: task.googleEventId,
+      })
+      .catch((error) => {
+        this.logger.warn(
+          `Gagal enqueue Google Calendar delete untuk task ${task.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
   }
 
   private wibDayBounds(now: Date): { start: Date; end: Date } {

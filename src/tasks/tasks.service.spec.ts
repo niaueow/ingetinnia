@@ -35,6 +35,7 @@ describe('TasksService', () => {
     vi.clearAllMocks();
     prisma.task.create.mockResolvedValue(task);
     prisma.task.findFirst.mockResolvedValue(task);
+    prisma.task.findMany.mockResolvedValue([]);
     prisma.task.update.mockResolvedValue({ ...task, status: 'COMPLETED' });
     prisma.task.updateMany.mockResolvedValue({ count: 0 });
     prisma.task.deleteMany.mockResolvedValue({ count: 2 });
@@ -113,10 +114,33 @@ describe('TasksService', () => {
 
   it('bulk deletes tasks with user isolation and no per-task loop', async () => {
     const service = new TasksService(prisma as never);
+    prisma.task.findMany.mockResolvedValue([
+      {
+        id: 'task-1',
+        userId: 1n,
+        googleCalendarId: null,
+        googleEventId: null,
+      },
+      {
+        id: 'task-2',
+        userId: 1n,
+        googleCalendarId: 'primary',
+        googleEventId: 'google-event-2',
+      },
+    ]);
 
     const result = await service.bulkDelete(1n, ['task-1', 'task-2', 'task-1']);
 
     expect(prisma.task.deleteMany).toHaveBeenCalledTimes(1);
+    expect(prisma.task.findMany).toHaveBeenCalledWith({
+      where: { userId: 1n, id: { in: ['task-1', 'task-2'] } },
+      select: {
+        id: true,
+        userId: true,
+        googleCalendarId: true,
+        googleEventId: true,
+      },
+    });
     expect(prisma.task.deleteMany).toHaveBeenCalledWith({
       where: { userId: 1n, id: { in: ['task-1', 'task-2'] } },
     });
