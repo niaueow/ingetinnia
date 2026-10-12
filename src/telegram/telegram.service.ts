@@ -157,7 +157,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await ctx.reply(
         [
           'Buka <a href="' + url + '">link ini</a> buat menyambungkan Google Calendar:',
-          url,
           '',
           'Setelah login berhasil, balik lagi ke bot ini ya.',
         ].join('\n'),
