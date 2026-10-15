@@ -7,7 +7,7 @@ import {
   NlpTaskResult,
 } from './nlp.types.js';
 
-const MODEL = 'llama-3.3-70b-versatile';
+const MODEL = 'llama-3.1-8b-instant';
 
 @Injectable()
 export class NlpService {
