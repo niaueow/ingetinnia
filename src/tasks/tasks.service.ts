@@ -245,7 +245,7 @@ export class TasksService {
     const task = await this.findOwnedTask(id, userId);
     await this.prisma.task.delete({ where: { id } });
     this.enqueueGoogleDelete(task);
-    return { message: 'Oke, task-nya udah dihapus.' };
+    return { message: 'okeh, task-nya udah dihapus.' };
   }
 
   async bulkDelete(userId: bigint, taskIds: string[]) {
@@ -359,7 +359,7 @@ export class TasksService {
       firstReminder.setUTCHours(2, 0, 0, 0);
       if (firstReminder.getTime() <= now + WIB_OFFSET_MS)
         firstReminder.setUTCDate(firstReminder.getUTCDate() + 1);
-      for (let day = 0; day <= 365; day += 1) {
+      for (let day = 0; day <= 2; day += 1) {
         const localReminder = new Date(firstReminder);
         localReminder.setUTCDate(localReminder.getUTCDate() + day);
         const utcReminder = new Date(localReminder.getTime() - WIB_OFFSET_MS);
@@ -367,7 +367,7 @@ export class TasksService {
         else break;
       }
     } else {
-      for (const hours of [6, 3, 1]) {
+      for (const hours of [1, 0.5]) {
         const reminder = new Date(deadline.getTime() - hours * 60 * 60 * 1000);
         if (reminder.getTime() > now) candidates.push(reminder);
       }
