@@ -20,6 +20,8 @@ DIRECT_URL=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_BOT_USERNAME=
 DISABLE_TELEGRAM=false
+TZ=Asia/Jakarta
+GROQ_API_KEY=
 PORT=3000
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
@@ -95,6 +97,11 @@ checkboxes, plus actions for deleting all completed or all pending tasks.
 The reminder worker runs every 30 seconds, sends pending reminders in batches, and marks overdue tasks.
 If Telegram reports that a recipient chat does not exist, is blocked, or is deactivated,
 the affected reminder is marked `CANCELLED` so the worker does not retry it forever.
+Non-command text is interpreted by Groq's `llama-3.3-70b-versatile` model when
+`GROQ_API_KEY` is configured. Task-like messages create a task directly, while
+conversational messages are ignored. Telegram users are registered when they send
+messages, and an automated daily briefing is sent at 07:00 WIB with that day's
+pending or overdue tasks.
 
 ## Google Calendar Sync
 

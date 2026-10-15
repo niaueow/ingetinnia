@@ -51,6 +51,16 @@ model Task {
   @@map("tasks")
 }
 
+model TelegramUser {
+  chatId    BigInt   @id @map("chat_id")
+  firstName String?  @map("first_name")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("telegram_users")
+}
+
 model Reminder {
   id           String    @id @default(uuid())
   taskId       String    @map("task_id")

@@ -5,7 +5,9 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron } from '@nestjs/schedule';
 import { GoogleCalendarService } from '../google-calendar/google-calendar.service.js';
+import { NlpService } from '../nlp/nlp.service.js';
 import { PrismaService } from '../prisma.service.js';
 import { TasksService } from '../tasks/tasks.service.js';
 import { Context, Markup, Telegraf } from 'telegraf';
@@ -44,7 +46,10 @@ type BulkDeleteState = {
   selectedTaskIds: Set<string>;
 };
 type BotState = AddState | EditState | BulkDeleteState;
-type BotContext = Context & { chat?: { id: number }; from?: { id: number } };
+type BotContext = Context & {
+  chat?: { id: number };
+  from?: { id: number; first_name?: string };
+};
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -59,6 +64,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly tasks: TasksService,
     private readonly googleCalendar: GoogleCalendarService,
+    private readonly nlp: NlpService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -71,6 +77,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.bot = new Telegraf<BotContext>(token);
+    this.bot.use(async (ctx, next) => {
+      await this.rememberUser(ctx);
+      await next();
+    });
     this.registerHandlers(this.bot);
     void this.startPolling();
   }
@@ -121,6 +131,82 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     bot.on('text', (ctx) => this.handleText(ctx));
+  }
+
+  private async rememberUser(ctx: BotContext): Promise<void> {
+    const chatId = this.chatId(ctx);
+    if (!chatId) return;
+    await this.prisma.telegramUser.upsert({
+      where: { chatId: BigInt(chatId) },
+      create: {
+        chatId: BigInt(chatId),
+        firstName: ctx.from?.first_name?.trim() || null,
+      },
+      update: {
+        firstName: ctx.from?.first_name?.trim() || undefined,
+        isActive: true,
+      },
+    });
+  }
+
+  @Cron('0 7 * * *', {
+    name: 'daily-briefing',
+    timeZone: 'Asia/Jakarta',
+  })
+  private async sendDailyBriefings(): Promise<void> {
+    if (!this.bot) return;
+    const { start, end } = this.wibDayBounds(new Date());
+    const users = await this.prisma.telegramUser.findMany({
+      where: { isActive: true },
+      select: { chatId: true, firstName: true },
+    });
+
+    for (const user of users) {
+      try {
+        const tasks = await this.prisma.task.findMany({
+          where: {
+            userId: user.chatId,
+            status: { in: ['PENDING', 'OVERDUE'] },
+            deadline: { gte: start, lt: end },
+          },
+          orderBy: { deadline: 'asc' },
+          select: { title: true },
+        });
+        const firstName = user.firstName?.trim() || 'kamu';
+        const date = new Intl.DateTimeFormat('id-ID', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+          timeZone: 'Asia/Jakarta',
+        }).format(new Date());
+        const message = tasks.length
+          ? [
+              `☀️ morninggg, ${firstName}!`,
+              '',
+              `ini agenda kamu hari enih (${date}):`,
+              ...tasks.map((task) => `📌 ${task.title}`),
+              '',
+              'semangat eak!',
+            ].join('\n')
+          : [
+              `☀️ morninggg, ${firstName}!`,
+              'agenda kamu hari ini kosong. ssntai dulu gasih',
+            ].join('\n');
+        await this.bot.telegram.sendMessage(user.chatId.toString(), message);
+      } catch (error) {
+        this.logger.warn(
+          `Gagal mengirim daily briefing ke ${user.chatId.toString()}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        if (this.isPermanentRecipientError(error)) {
+          await this.prisma.telegramUser.update({
+            where: { chatId: user.chatId },
+            data: { isActive: false },
+          });
+        }
+      }
+    }
   }
 
   private async sendMenu(ctx: BotContext): Promise<void> {
@@ -205,8 +291,39 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (text === "today's task") return this.sendToday(ctx);
     if (text === 'overdue hari ini') return this.sendOverdue(ctx);
 
+    if (text.startsWith('/')) return;
     const state = this.states.get(chatId);
-    if (!state) return;
+    if (!state) {
+      try {
+        const result = await this.nlp.parseTask(text, new Date().toISOString());
+        if (!result.isTask) return;
+        const task = await this.tasks.create({
+          title: result.title,
+          deadline: result.dueDate,
+          userId: chatId,
+        });
+        await ctx.reply(
+          [
+            'okeh, task-nya don dicatet :D',
+            '',
+            `📝 ${task.title}`,
+            `📅 ${this.formatDate(task.deadline)}`,
+          ].join('\n'),
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Gagal memproses pesan NLP: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        await ctx.reply(
+          error instanceof Error
+            ? error.message
+            : 'Pesan task belum bisa dipahami.',
+        );
+      }
+      return;
+    }
     if ('flow' in state && state.flow === 'bulk-delete') return;
     if ('flow' in state && state.flow === 'edit') {
       if (state.step !== 'title') return;
@@ -732,6 +849,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       day: now.getUTCDate(),
       hour: now.getUTCHours(),
       minute: now.getUTCMinutes(),
+    };
+  }
+
+  private wibDayBounds(now: Date): { start: Date; end: Date } {
+    const local = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const start = new Date(
+      Date.UTC(
+        local.getUTCFullYear(),
+        local.getUTCMonth(),
+        local.getUTCDate(),
+      ) - 7 * 60 * 60 * 1000,
+    );
+    return {
+      start,
+      end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
     };
   }
 
